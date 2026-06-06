@@ -68,6 +68,7 @@ td{padding:7px 8px;vertical-align:middle}td.r{text-align:right}
   <button class="fbtn" onclick="setFilter('consol',this)">◐ Консолид.</button>
   <button class="fbtn" onclick="setFilter('impulse',this)">▼ Импульс</button>
   <label class="autolabel"><input type="checkbox" id="autoRefresh" onchange="toggleAuto()"> Авто 60с</label>
+  <label class="autolabel"><input type="checkbox" id="tgToggle" checked onchange="tgAlerts=this.checked"> TG алерты</label>
   <button class="rbtn" id="rbtn" onclick="loadData()">
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>
@@ -83,6 +84,60 @@ td{padding:7px 8px;vertical-align:middle}td.r{text-align:right}
 
 <script>
 let allData=[],sortCol='phase',sortDir='desc',filterMode='all',autoTimer=null;
+
+// Telegram алерты
+const TG_TOKEN='8662258426:AAH8MT4588Dh0u_okVf21uch_0q-z1zKNKY';
+const TG_CHAT='913976106';
+let tgAlerts=true; // включить/выключить
+let alertedSymbols={}; // чтобы не спамить одну монету
+
+async function sendTelegram(msg){
+  if(!tgAlerts)return;
+  try{
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chat_id:TG_CHAT,text:msg,parse_mode:'HTML'})
+    });
+  }catch(e){}
+}
+
+function checkAlerts(data){
+  const now=Date.now();
+  data.forEach(t=>{
+    if(t.phase==='break'){
+      const key=t.symbol;
+      // Алертим один раз в 4 часа на монету
+      if(!alertedSymbols[key]||now-alertedSymbols[key]>4*60*60*1000){
+        alertedSymbols[key]=now;
+        const dist=t.distBreak!==null?`
+До пробоя: ${t.distBreak.toFixed(2)} ATR`:'';
+        const vol=t.volRatio!==null?`
+Объём: ${t.volRatio.toFixed(1)}x`:'';
+        const wave=t.ratio1h!==null?`
+Волна 1ч: ${t.ratio1h.toFixed(2)}`:'';
+        const vel=t.vel1h!==null?`
+Скор.1ч: ${t.vel1h>0?'↑':'↓'} ${Math.abs(t.vel1h).toFixed(2)}`:'';
+        const msg=`🚀 <b>ПРОБОЙ: ${t.symbol}</b>
+ТФ: ${t.tf||'—'} · Скор: ${t.score}${dist}${vol}${wave}${vel}
+
+https://www.bybit.com/trade/usdt/${t.sym}`;
+        sendTelegram(msg);
+      }
+    }
+    // Алерт когда монета близко к пробою (< 0.3 ATR)
+    if(t.phase==='consol'&&t.distBreak!==null&&t.distBreak<0.3&&t.distBreak>0){
+      const key=t.symbol+'_near';
+      if(!alertedSymbols[key]||now-alertedSymbols[key]>2*60*60*1000){
+        alertedSymbols[key]=now;
+        const msg=`⚡ <b>БЛИЗКО К ПРОБОЮ: ${t.symbol}</b>
+ТФ: ${t.tf||'—'} · ${t.distBreak.toFixed(2)} ATR до границы
+Скор: ${t.score}`;
+        sendTelegram(msg);
+      }
+    }
+  });
+}
 
 function setFilter(m,btn){
   filterMode=m;
@@ -283,6 +338,7 @@ async function loadData(){
     }
 
     allData=results;
+    checkAlerts(results);
     const now=new Date();
     const ts=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
     document.getElementById('status').textContent=`Обновлено: ${ts} · адаптивный ТФ · Bybit API`;
